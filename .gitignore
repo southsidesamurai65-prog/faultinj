@@ -35,8 +35,8 @@ data/*.tar.gz
 exp/
 
 # ---- root source material (slides / diagram, not tracked) ----
-/agent-bitflip.pptx
-/agent.jpg
+/*.pptx
+/*.jpg
 
 # ---- OS ----
 .DS_Store
