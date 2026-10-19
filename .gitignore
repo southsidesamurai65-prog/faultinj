@@ -1,0 +1,42 @@
+# ============================================================
+# Track only what is needed to run; ignore generated / downloaded / secret files
+# ============================================================
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# ---- secrets / local environment ----
+.env
+*.env.local
+
+# ---- logs / run outputs ----
+*.log
+fault-inject.log.jsonl
+results/
+test_results/
+harbor_results/
+jobs/
+
+# ---- generated test task copies (derived from data/) ----
+pipe/tasks/
+pipe/configs/test-*.yaml
+
+# ---- downloaded benchmark data (re-fetch: bash data/download.sh) ----
+data/terminal-bench-2-1/
+data/nl2repo/
+data/*.tar.gz
+
+# ---- generated deliverables / experiment record (not tracked) ----
+exp/
+
+# ---- root source material (slides / diagram, not tracked) ----
+/agent-bitflip.pptx
+/agent.jpg
+
+# ---- OS ----
+.DS_Store

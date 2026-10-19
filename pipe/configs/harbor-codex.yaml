@@ -1,0 +1,22 @@
+# Harbor container backend x codex x gpt-6-luna x Terminal-Bench
+backend: harbor
+harness: codex
+model: gpt-6-luna
+
+benchmark: terminal-bench
+benchmark_path: ../data/terminal-bench-2-1/tasks
+
+site: context
+fault:
+  mode: burst
+  prob: 0.001
+  width: 8
+  seed: 1
+tools: []
+log_path: fault-inject.log.jsonl
+
+limit: 1
+dry_run: true
+
+results_dir: harbor_results
+prebuilt: true           # task image already ships the agent toolchain (skip install)
