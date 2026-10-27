@@ -1,0 +1,24 @@
+# 30-task GSM8K pilot: free model first, Go model as transport fallback.
+backend: chat
+model: mimo-v2.6-flash-free
+model_fallbacks: [mimo-v2.6-flash]
+
+benchmark: math
+benchmark_path: ../data/pilot/math30.jsonl
+
+site: context
+inject_user: true
+inject_tool: false
+fault:
+  mode: single
+  prob: 0.002
+  width: 8
+  seed: 1
+tools: []
+
+limit: 30
+dry_run: false
+runs_dir: runs/math30-mimo-v2.6-flash-free-opencode
+chat_retries: 1
+chat_retry_sleep: 3
+chat_timeout: 90

@@ -1,0 +1,98 @@
+初步结论（A-E 原实验：424 runs / 469 injection events；Terminal-Bench 追加：60 runs / 378 events；方向性，非最终结论）
+
+一、目前数据支持的结论
+
+1. 主要失效模式是“静默接受”，不是“明确发现”
+   469 个注入事件：
+   - recovered_silently : 425
+   - failed_unattributed: 19
+   - recovered          : 19
+   - silent_error       :  5
+   - detected_but_failed:  1
+
+   只有 20 个事件有明显检测信号，而且全部集中在 math30 E 的 self-check 场景。
+   大多数情况下，agent 要么没发现但最后做对了，要么错了但也没说自己发现了异常。
+
+2. 明确检测主要来自 E 的二次检查
+   math30 E：30 injections，20 detected。
+   这说明“让 agent 回头检查自己的答案”确实能暴露一部分污染。
+   但 E 在 NL2Repo 上完全没检测到，因为 coding 的 E 是污染历史 tool call，
+   不是当前执行内容，而且 agent 会重新读文件/跑测试。
+
+3. 数学 prompt 注入是当前最明显的真实失效点
+   当前失败集中在数学，尤其是 A：
+   - gsm8k-2 在 p=.002/.005 多个 seed 下出现错误：
+     70003、69999、70600，gold 是 70000
+   - gsm8k-9 出现 475 vs 460
+   - math p=.005 是 12/15
+   - math30 p=.002 是 28/30
+   这类错误符合“数字被污染后直接进入计算，模型没有交叉验证”的模式。
+
+4. coding 在当前设置下确实更稳
+   当前结果：
+   - code:       24/24
+   - knowledge:  35/35
+   - nl2repo:    21/22
+   - longcontext:41/42
+   - math:       46/50
+   - math30:    244/251
+
+   但 coding 的稳健不能简单归因于“模型更强”，更可能是：
+   - 有测试/编译/运行反馈
+   - agent 会重新读文件、重跑命令
+   - 有外部 verifier 兜底
+
+   NL2Repo 唯一一次失败是 pyperclip 的 packaging 错误，不是注入直接导致的。
+   pyperclip verifier 还有 90 skipped，说明“成功”本身也偏宽松。
+
+二、目前还不能下的结论
+
+1. 不能说 coding 天然抗注入
+   p 不一致：coding 是 .001，math 有些是 .002/.005。
+   而且 coding 的验证闭环会掩盖一部分污染。
+
+2. 不能比较 B/C/D/E 哪个 site 更强
+   - math 的 B/D 是 no-op，因为没有工具
+   - NL2Repo 的 B/C/D/E 在 .001 下几乎都成功
+   - E 的 123 个事件很多是污染历史 tool call，不等于污染当前执行
+   所以现在没有足够的 site 间对比。
+
+3. 不能把 469 个事件当独立样本
+   12 个 run 有多次注入，最多 55 次；同一个 run 的多条事件共用最终 reward，
+   前面注入还会影响后面行为。统计应该以 run 为单位，事件只能用于案例分析。
+
+4. 公开 benchmark 缺少 mid-run user prompt
+   现在的 A/C 基本只覆盖初始用户 prompt。真实用户中途纠错、追加需求、审批、
+   诱导，benchmark 里没有。这会让“抗注入”结论偏乐观。
+
+三、更合适的初步结论表述
+
+在当前低注入概率和现有 verifier 下，coding agent 表现出较强的任务级恢复能力，
+主要因为工具反馈和重复验证；数学任务对 prompt 数字污染更敏感，且模型很少
+显式报告异常。E 在自检型数学任务中能触发检测，但在 coding 历史注入中效果很弱。
+现有结果不足以比较 B/C/D/E 的注入强度，也不足以证明 coding 天然抗注入。
+
+四、下一步最值得补的实验
+
+1. NL2Repo 提高 p 到 .005/.01/.02，多种子
+2. 加 mid-run user turn，专门注入第二轮用户消息
+3. 用不 skip 的 verifier，避免 90 skipped 这种假阳性
+4. 统计以 run 为单位，事件只做案例分析
+
+五、Terminal-Bench 追加实验（baseline + A-E，10 tasks，单 seed）
+
+结果（verifier / clean）：
+  baseline  8/10  7/10
+  A         7/10  6/10   2 injections
+  B         8/10  7/10   66 injections
+  C         8/10  7/10   88 injections
+  D         7/10  6/10   53 injections
+  E         6/10  5/10   169 injections
+
+注意：
+- 单 seed、10 tasks，1 个任务的差异不足以说明 site 效果。
+- A/E 的注入机会数相差近两个数量级，原始事件数和通过率不能直接比较。
+- baseline 失败：break-filter-js-from-html、polyglot-c-py；比较前应排除或用稳定 baseline 任务。
+- crack-7z-hash verifier 通过但 agent 报 NonZeroAgentExitCodeError，算非干净成功。
+- configure-git-webserver E 的失败是未创建 SSH user/authorized_keys，不是直接执行污染。
+- 下一步应做固定剂量（如每 run 1/5 个成功注入）、多种子、run 级统计，并补 mid-run user turn。

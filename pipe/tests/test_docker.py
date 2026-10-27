@@ -8,7 +8,6 @@ from pipe import (  # noqa: E402
     DockerConfig,
     FaultConfig,
     InjectOptions,
-    Site,
     Task,
     resolve_model,
 )
@@ -50,31 +49,6 @@ def test_opencode_install_and_agent(tmp_path, monkeypatch):
     assert backend.agent_env(model)["OPENCODE_CONFIG"].endswith("opencode.json")
 
 
-def test_codex_install_and_agent(tmp_path, monkeypatch):
-    monkeypatch.setenv("PIPE_CODEX_BASE_URL", "https://codex/api")
-    monkeypatch.setenv("PIPE_CODEX_API_KEY", "sk-codex")
-    backend = DockerBackend(DockerConfig(harness="codex"))
-    model = resolve_model("gpt-6-luna")
-    inject = InjectOptions(fault=FaultConfig(), site=Site.CONTEXT)
-
-    install = backend.install_command(model, inject)
-    assert "fault_shim.py" in install and "/tmp/fault-bin" in install
-    assert "profile.d" in install  # multi-channel PATH activation
-    agent = backend.agent_command(_task(tmp_path), model)
-    assert "codex exec --model gpt-6-luna" in agent
-    env = backend.agent_env(model)
-    assert env["OPENAI_API_KEY"] == "sk-codex" and env["OPENAI_BASE_URL"] == "https://codex/api"
-    assert env["PATH"].startswith("/tmp/fault-bin:")
-
-
-def test_proxy_env():
-    assert DockerBackend(DockerConfig()).proxy_env() == {}
-    backend = DockerBackend(DockerConfig(proxy="http://172.17.0.1:19829"))
-    env = backend.proxy_env()
-    assert env["http_proxy"] == env["https_proxy"] == "http://172.17.0.1:19829"
-    assert "no_proxy" in env
-
-
 def test_build_exec_env_flags(tmp_path):
     backend = DockerBackend()
     cmd = backend.build_exec("c1", "echo hi", {"A": "1", "B": "2"})
@@ -88,3 +62,48 @@ def test_dry_run_returns_plan(tmp_path):
     task = _task(tmp_path)
     result = backend.run(task, resolve_model("deepseek-v4.1-flash"), InjectOptions(fault=FaultConfig()), dry_run=True)
     assert result.detail == "dry-run" and "docker run" in result.error
+
+
+def test_go_provider_assets_and_command(tmp_path, monkeypatch):
+    binary = tmp_path / "opencode"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    auth = tmp_path / "auth.json"
+    auth.write_text('{"opencode-go":{"type":"api","key":"x"}}')
+    model = resolve_model("deepseek-v4.1-flash-go")
+    backend = DockerBackend(
+        DockerConfig(
+            harness="opencode",
+            opencode_bin=str(binary),
+            auth_file=str(auth),
+            inject_tool=False,
+        )
+    )
+    backend._assets = backend._opencode_assets(model)
+    assert backend._assets
+    cmd = backend.build_create(_task(tmp_path), "c1")
+    joined = " ".join(cmd)
+    assert ":/usr/local/bin/opencode:ro" in joined
+    assert ":/root/.local/share/opencode/auth.json:ro" in joined
+    agent = backend.agent_command(_task(tmp_path), model)
+    assert "opencode-go/deepseek-v4.1-flash" in agent
+    assert "--auto" in agent and "--agent chat" in agent
+    install = backend.install_command(
+        model,
+        InjectOptions(fault=FaultConfig(mode="burst", prob=0.01)),
+        run_id="r1",
+        task_id="t1",
+    )
+    assert "fault-inject.ts" in install and "opencode.json" in install
+
+
+def test_go_assets_missing(tmp_path):
+    backend = DockerBackend(
+        DockerConfig(harness="opencode", auth_file=str(tmp_path / "missing.json"))
+    )
+    try:
+        backend._opencode_assets(resolve_model("deepseek-v4.1-flash-go"))
+    except RuntimeError as exc:
+        assert "opencode binary" in str(exc) or "auth file" in str(exc)
+    else:
+        raise AssertionError("missing go assets should raise")

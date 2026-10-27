@@ -1,15 +1,17 @@
 # Harbor container backend x opencode x deepseek-v4.1-flash x Terminal-Bench
 backend: harbor
-harness: opencode
 model: deepseek-v4.1-flash
 
 benchmark: terminal-bench
 benchmark_path: ../data/terminal-bench-2-1/tasks
 
 site: context            # context = all tool results; tool = tool arguments
+inject_user: false
+inject_tool: false
+inject_assistant: false
 fault:
   mode: burst            # single | burst
-  prob: 0.001
+  prob: 0.0
   width: 8               # burst length in bytes (all 8 bits of each byte flip)
   seed: 1
 tools: []
@@ -19,5 +21,6 @@ limit: 1
 dry_run: true
 
 # harbor-specific
+runs_dir: runs/terminal-bench-deepseek-v4.1-flash-opencode
 results_dir: harbor_results
 prebuilt: true           # task image already ships the agent toolchain (skip install)

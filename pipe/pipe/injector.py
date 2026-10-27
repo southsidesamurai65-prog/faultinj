@@ -8,7 +8,8 @@ interaction. It decides *where* to inject via ``Site``:
 
 The injector contains no harness- or model-specific logic; adding a new
 harness only requires calling ``before_tool`` / ``after_tool`` at the right
-points.
+points.  Assistant-history injection (E) is implemented by the OpenCode plugin
+because it is a conversation-level hook, not a tool-level middleware call.
 """
 
 from __future__ import annotations
@@ -125,17 +126,3 @@ class InjectOptions:
             "seed": self.fault.seed,
             "logPath": self.log_path,
         }
-
-
-def read_injection_stats(log_path: Path) -> tuple[int, int]:
-    """Return (injected_calls, total_flips) from a JSONL injection log."""
-    calls = flips = 0
-    if log_path.is_file():
-        for line in log_path.read_text().splitlines():
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            calls += 1
-            flips += int(rec.get("n_flips", 0))
-    return calls, flips

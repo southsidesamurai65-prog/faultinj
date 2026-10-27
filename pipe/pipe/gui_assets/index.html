@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pipe console</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">π</div>
+        <div>
+          <h1>pipe console</h1>
+          <p>fault-injection experiment runner</p>
+        </div>
+      </div>
+      <div class="status-pill" id="statusPill">
+        <span class="status-dot"></span>
+        <span id="statusText">idle</span>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Run</h2>
+            <p class="hint">选择一个配置，留空的字段从配置继承。</p>
+          </div>
+          <button class="ghost" id="refreshConfigs" type="button">刷新配置</button>
+        </div>
+
+        <label class="field">
+          <span>Config</span>
+          <select id="config"></select>
+        </label>
+        <div class="config-meta" id="configMeta"></div>
+
+        <div class="form-grid">
+          <label class="field">
+            <span>Limit</span>
+            <input id="limit" type="number" min="1" step="1" placeholder="继承">
+          </label>
+          <label class="field">
+            <span>Tasks</span>
+            <input id="tasks" type="text" placeholder="逗号分隔，继承">
+          </label>
+          <label class="field">
+            <span>Model</span>
+            <input id="model" type="text" placeholder="继承">
+          </label>
+          <label class="field">
+            <span>Prob</span>
+            <input id="prob" type="number" min="0" step="0.000001" placeholder="继承">
+          </label>
+          <label class="field">
+            <span>Site</span>
+            <select id="site">
+              <option value="inherit">继承</option>
+              <option value="context">context</option>
+              <option value="tool">tool</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Dry run</span>
+            <select id="dryRun">
+              <option value="0">否</option>
+              <option value="1">是</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="inject-grid">
+          <label class="field">
+            <span>Inject user</span>
+            <select data-inject="inject_user">
+              <option value="inherit">继承</option>
+              <option value="on">on</option>
+              <option value="off">off</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Inject tool</span>
+            <select data-inject="inject_tool">
+              <option value="inherit">继承</option>
+              <option value="on">on</option>
+              <option value="off">off</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Inject assistant</span>
+            <select data-inject="inject_assistant">
+              <option value="inherit">继承</option>
+              <option value="on">on</option>
+              <option value="off">off</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button class="primary" id="start" type="button">开始运行</button>
+          <button class="danger" id="stop" type="button" disabled>停止</button>
+          <span class="run-hint" id="runHint"></span>
+        </div>
+      </section>
+
+      <section class="panel log-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Live log</h2>
+            <p class="hint">stdout + stderr，自动滚动。</p>
+          </div>
+          <button class="ghost" id="clearLog" type="button">清空显示</button>
+        </div>
+        <pre id="log" class="log">等待运行…</pre>
+      </section>
+    </main>
+
+    <section class="panel runs-panel">
+      <div class="panel-head">
+        <div>
+          <h2>Recent runs</h2>
+          <p class="hint">最近 40 个 result.json，按时间倒序。</p>
+        </div>
+        <button class="ghost" id="refreshRuns" type="button">刷新结果</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>suite</th>
+              <th>task</th>
+              <th>model</th>
+              <th>reward</th>
+              <th>inj</th>
+              <th>flips</th>
+              <th>site</th>
+              <th>report</th>
+            </tr>
+          </thead>
+          <tbody id="runsBody">
+            <tr><td colspan="8" class="empty">还没有结果</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

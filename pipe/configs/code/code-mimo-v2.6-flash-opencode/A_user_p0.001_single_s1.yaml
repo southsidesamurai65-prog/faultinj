@@ -1,0 +1,25 @@
+# Host-side coding pilot: HumanEval-style tasks, prompt injection only.
+# This suite uses MiMo Go, matching the recorded runs.
+backend: chat
+model: mimo-v2.6-flash
+model_fallbacks: []
+
+benchmark: code
+benchmark_path: ../data/code/humaneval3.jsonl
+
+site: context
+inject_user: true
+inject_tool: false
+fault:
+  mode: single
+  prob: 0.001
+  width: 8
+  seed: 1
+tools: []
+
+limit: 3
+dry_run: false
+runs_dir: runs/code-mimo-v2.6-flash-opencode
+chat_retries: 1
+chat_retry_sleep: 3
+chat_timeout: 120

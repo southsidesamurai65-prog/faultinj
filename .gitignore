@@ -7,12 +7,20 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 .venv/
 venv/
 
 # ---- secrets / local environment ----
 .env
-*.env.local
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
 
 # ---- logs / run outputs ----
 *.log
@@ -21,6 +29,8 @@ results/
 test_results/
 harbor_results/
 jobs/
+runs/
+pipe/runs/
 
 # ---- generated test task copies (derived from data/) ----
 pipe/tasks/
@@ -33,6 +43,7 @@ data/*.tar.gz
 
 # ---- generated deliverables / experiment record (not tracked) ----
 exp/
+pipe/all-injections.html
 
 # ---- root source material (slides / diagram, not tracked) ----
 /*.pptx

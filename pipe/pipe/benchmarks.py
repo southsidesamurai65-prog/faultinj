@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -153,9 +154,355 @@ class NL2Repo:
         return out
 
 
+
+# ---------------------------------------------------------------------------
+# Chat-style benchmarks (math / knowledge / long-context)
+# ---------------------------------------------------------------------------
+
+_MATH_PROMPT = (
+    "{question}\n\nSolve the problem above. Do not use any tools. Show your "
+    "reasoning if useful, then give the final answer as a single number on the "
+    "last line in the format:\nAnswer: <number>\n"
+)
+
+_KNOWLEDGE_PROMPT = (
+    "{question}\n{choices}\n\nAnswer the multiple-choice question above. Do "
+    "not use any tools. Reply with only the letter of the correct option "
+    "(A, B, C, or D).\n"
+)
+
+_LONG_CONTEXT_PROMPT = (
+    "Read the document and answer the multiple-choice question. Do not use any "
+    "tools. Reply with only the letter of the correct option (A, B, C, or D).\n\n"
+    "<document>\n{context}\n</document>\n\n"
+    "Question: {question}\n"
+    "A. {choice_A}\nB. {choice_B}\nC. {choice_C}\nD. {choice_D}\n"
+)
+
+
+def extract_final_answer(text: str) -> str:
+    """Best-effort final-answer extraction for chat benchmarks."""
+    if not text:
+        return ""
+    m = re.findall(r"\\boxed\{([^{}]*)\}", text)
+    if m:
+        return m[-1].strip()
+    m = re.findall(
+        r"(?:final\s+answer|answer)\s*[:=]\s*([^\n]+)", text, flags=re.I
+    )
+    if m:
+        return m[-1].strip().strip("$` ")
+    # Multiple-choice: prefer a standalone capital letter near the end.
+    m = re.findall(r"\b([A-J])\b", text)
+    if m:
+        return m[-1]
+    # Last numeric token (handles "$1,234", "3.14", "-5", "12%").
+    m = re.findall(r"-?\d[\d,]*(?:\.\d+)?", text)
+    if m:
+        return m[-1].replace(",", "")
+    return text.strip().splitlines()[-1].strip()
+
+
+def _normalise_number(value: str) -> float | None:
+    if value is None:
+        return None
+    s = str(value).strip().replace(",", "").replace("$", "").replace("%", "")
+    s = s.rstrip(".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def math_correct(pred: str, gold: str) -> bool:
+    pred_s = str(pred).strip()
+    gold_s = str(gold).strip()
+    if pred_s.lower() == gold_s.lower():
+        return True
+    p = _normalise_number(pred_s)
+    g = _normalise_number(gold_s)
+    if p is not None and g is not None:
+        return abs(p - g) <= 1e-9 * max(1.0, abs(g))
+    return False
+
+
+def choice_correct(pred: str, gold: str) -> bool:
+    p = str(pred).strip().upper()
+    g = str(gold).strip().upper()
+    if p == g:
+        return True
+    # "Answer: C", "(C)", "C." etc.
+    m = re.search(r"\b([A-J])\b", p)
+    return bool(m and m.group(1) == g)
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    rows: list[dict] = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rows.append(json.loads(line))
+    return rows
+
+
+def _chat_files(path: str | Path) -> list[Path]:
+    p = Path(path)
+    if p.is_file():
+        return [p]
+    return sorted(p.glob("*.jsonl"))
+
+
+def _make_chat_evaluator(gold: str, kind: str) -> Callable[[Path], EvalResult]:
+    def evaluate(workdir: Path) -> EvalResult:
+        answer_file = workdir / "answer.txt"
+        text = answer_file.read_text() if answer_file.is_file() else ""
+        pred = extract_final_answer(text)
+        ok = math_correct(pred, gold) if kind == "math" else choice_correct(pred, gold)
+        return EvalResult(
+            1.0 if ok else 0.0,
+            partial=None,
+            detail=f"pred={pred!r} gold={gold!r}",
+            answer=pred,
+        )
+
+    return evaluate
+
+
+_CODING_PROMPT = (
+    "{prompt}\n\n"
+    "Write the complete implementation to `solution.py` in the current "
+    "directory. You may inspect files and run commands in this directory. "
+    "Do not use the network. Hidden tests will import `{entry_point}` from "
+    "`solution.py` and run them after you finish.\n"
+)
+
+
+def _make_code_evaluator(entry_point: str, test: str, timeout: int = 30) -> Callable[[Path], EvalResult]:
+    def evaluate(workdir: Path) -> EvalResult:
+        solution = workdir / "solution.py"
+        if not solution.is_file():
+            return EvalResult(0.0, detail="solution.py missing")
+        test_path = workdir / "_hidden_test.py"
+        test_path.write_text(
+            test
+            + "\n\nfrom solution import "
+            + entry_point
+            + " as candidate\ncheck(candidate)\n"
+        )
+        try:
+            proc = subprocess.run(
+                [sys.executable, test_path.name],
+                cwd=workdir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return EvalResult(0.0, detail=f"test error: {exc}")
+        detail = (proc.stdout + proc.stderr).strip()[-800:]
+        return EvalResult(1.0 if proc.returncode == 0 else 0.0, detail=detail or f"exit={proc.returncode}")
+
+    return evaluate
+
+
+class _ChatBenchmark:
+    kind = "chat"
+
+    def __init__(self, path: str | Path, limit: int | None = None) -> None:
+        self.path = Path(path)
+        self._limit = limit
+
+    def _rows(self) -> list[dict]:
+        rows: list[dict] = []
+        for f in _chat_files(self.path):
+            rows.extend(_read_jsonl(f))
+        return rows
+
+    def tasks(self, limit: int | None = None) -> list[Task]:
+        n = self._limit if limit is None else limit
+        out: list[Task] = []
+        for i, row in enumerate(self._rows()):
+            if n is not None and len(out) >= n:
+                break
+            out.append(self._task(i, row))
+        return out
+
+    def _task(self, i: int, row: dict) -> Task:  # pragma: no cover - overridden
+        raise NotImplementedError
+
+
+class MathQA(_ChatBenchmark):
+    """JSONL rows: ``{id?, question, answer}``."""
+
+    name = "math"
+
+    def _task(self, i: int, row: dict) -> Task:
+        gold = str(row.get("answer", ""))
+        question = str(row.get("question") or row.get("problem") or "")
+        name = str(row.get("id") or f"math-{i}")
+        instruction = _MATH_PROMPT.format(question=question)
+        return Task(
+            name=name,
+            instruction=instruction,
+            workdir=self.path.parent,
+            evaluator=_make_chat_evaluator(gold, "math"),
+            answer=gold,
+            metadata={"kind": "math", "question": question, "source": row.get("source")},
+        )
+
+
+_MATH_REVIEW_PROMPT = (
+    "Review the answer and reasoning above. Check for arithmetic or consistency "
+    "errors, and correct them if needed. Do not use any tools. End with the "
+    "final answer on the last line in the format:\nAnswer: <number>\n"
+)
+
+
+class MathSelfCheckQA(MathQA):
+    """Two-turn GSM8K: solve once, then review the previous answer."""
+
+    name = "math-selfcheck"
+
+    def _task(self, i: int, row: dict) -> Task:
+        task = super()._task(i, row)
+        task.metadata["followup"] = _MATH_REVIEW_PROMPT
+        return task
+
+
+class KnowledgeQA(_ChatBenchmark):
+    """JSONL rows: ``{id?, question, choices, answer}`` (answer = A/B/C/D)."""
+
+    name = "knowledge"
+
+    def _task(self, i: int, row: dict) -> Task:
+        gold = str(row.get("answer", "")).strip()
+        question = str(row.get("question", ""))
+        choices = list(row.get("choices") or [])
+        letters = "ABCD"
+        lines = "\n".join(
+            f"{letters[j]}. {c}" for j, c in enumerate(choices[:4])
+        )
+        instruction = _KNOWLEDGE_PROMPT.format(question=question, choices=lines)
+        name = str(row.get("id") or f"knowledge-{i}")
+        return Task(
+            name=name,
+            instruction=instruction,
+            workdir=self.path.parent,
+            evaluator=_make_chat_evaluator(gold, "choice"),
+            answer=gold,
+            metadata={
+                "kind": "knowledge",
+                "question": question,
+                "choices": choices,
+                "source": row.get("source"),
+            },
+        )
+
+
+class LongContextQA(_ChatBenchmark):
+    """JSONL rows: LongBench-v2 style ``{_id, context, question, choice_A..D, answer}``."""
+
+    name = "longcontext"
+
+    def _task(self, i: int, row: dict) -> Task:
+        gold = str(row.get("answer", "")).strip()
+        context = str(row.get("context", ""))
+        question = str(row.get("question", ""))
+        choice_a = str(row.get("choice_A", ""))
+        choice_b = str(row.get("choice_B", ""))
+        choice_c = str(row.get("choice_C", ""))
+        choice_d = str(row.get("choice_D", ""))
+        instruction = _LONG_CONTEXT_PROMPT.format(
+            context=context,
+            question=question,
+            choice_A=choice_a,
+            choice_B=choice_b,
+            choice_C=choice_c,
+            choice_D=choice_d,
+        )
+        name = str(row.get("_id") or row.get("id") or f"longcontext-{i}")
+        return Task(
+            name=name,
+            instruction=instruction,
+            workdir=self.path.parent,
+            evaluator=_make_chat_evaluator(gold, "choice"),
+            answer=gold,
+            metadata={
+                "kind": "longcontext",
+                "question": question,
+                "choices": [choice_a, choice_b, choice_c, choice_d],
+                "domain": row.get("domain"),
+                "sub_domain": row.get("sub_domain"),
+                "length": row.get("length"),
+                "context_chars": len(context),
+            },
+        )
+
+
+_LONG_CONTEXT_REVIEW_PROMPT = (
+    "Review the answer and explanation above using the document and question. "
+    "Check whether the selected option is correct, and correct it if needed. "
+    "Do not use any tools. End with the final answer on the last line in the "
+    "format:\nAnswer: <letter>\n"
+)
+
+
+class LongContextSelfCheckQA(LongContextQA):
+    """Two-turn long-context task with a reasoning-first first answer.
+
+    E injects prior assistant messages.  The plain long-context prompt returns
+    only a single letter, which is too short for a meaningful p=.001 probe, so
+    this variant asks for a one-sentence explanation before the answer.
+    """
+
+    name = "longcontext-selfcheck"
+
+    def _task(self, i: int, row: dict) -> Task:
+        task = super()._task(i, row)
+        task.instruction = task.instruction.replace(
+            "Reply with only the letter of the correct option (A, B, C, or D).\n",
+            "First explain your choice in one sentence, then give the final "
+            "answer on the last line in the format:\nAnswer: <letter>\n",
+        )
+        task.metadata["followup"] = _LONG_CONTEXT_REVIEW_PROMPT
+        return task
+
+
+class CodeQA(_ChatBenchmark):
+    """JSONL rows: ``{id, prompt, test, entry_point}`` (HumanEval style)."""
+
+    name = "code"
+
+    def _task(self, i: int, row: dict) -> Task:
+        prompt = str(row.get("prompt") or row.get("instruction") or "")
+        entry_point = str(row.get("entry_point") or "")
+        test = str(row.get("test") or "")
+        name = str(row.get("id") or row.get("task_id") or f"code-{i}")
+        instruction = _CODING_PROMPT.format(prompt=prompt, entry_point=entry_point)
+        return Task(
+            name=name,
+            instruction=instruction,
+            workdir=self.path.parent,
+            evaluator=_make_code_evaluator(entry_point, test),
+            answer=entry_point,
+            metadata={
+                "kind": "code",
+                "entry_point": entry_point,
+                "source": row.get("source"),
+            },
+        )
+
+
 BENCHMARKS = {
     "terminal-bench": TerminalBench,
     "nl2repo": NL2Repo,
+    "math": MathQA,
+    "math-selfcheck": MathSelfCheckQA,
+    "knowledge": KnowledgeQA,
+    "longcontext": LongContextQA,
+    "longcontext-selfcheck": LongContextSelfCheckQA,
+    "code": CodeQA,
 }
 
 

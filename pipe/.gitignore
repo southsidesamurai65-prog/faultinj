@@ -1,6 +1,14 @@
 .env
+.env.*
+!.env.example
+*.pem
+*.key
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
 .pytest_cache/
 *.log
 fault-inject.log.jsonl
+runs/
+harbor_results/
+all-injections.html

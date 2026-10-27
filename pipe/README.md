@@ -1,199 +1,237 @@
-# pipe — Agent fault-injection pipeline (runs inside containers)
+# pipe — agent fault injection
 
-A bit-flip fault-injection pipeline **decoupled from harness / model / benchmark**.
-The agent always runs **inside the task container**; bits are flipped at specific
-points on the "tool call" causal path to observe the effect on task outcome.
+`pipe` injects bit flips into the text an agent sees and measures whether the
+agent notices, corrects, or silently accepts the corruption.
+
+It supports two execution modes:
+
+- **host chat**: `opencode run` on the host for GSM8K / MMLU / LongBench /
+  HumanEval;
+- **containers**: Docker or Harbor for NL2Repo / Terminal-Bench.
+
+Injection is implemented with OpenCode plugin hooks. There is no HTTP proxy.
+
+## Naming
+
+Result suites use one directory per benchmark/model/harness:
+
+```text
+runs/<bench>-<model>-<harness>/
+  <timestamp>_<task>_<scheme>_<sites>_p<prob>_<mode><width>_s<seed>/
+```
+
+Examples:
+
+```text
+runs/math30-deepseek-v4.1-flash-go-opencode/
+  20261025-230659_gsm8k-0_A_user_p0_single_s1/
+  20261025-231129_gsm8k-0_C_user+tool_result_p0.002_single_s1/
+```
+
+`scheme` is `A`/`B`/`C`/`D`/`E` or `baseline`; `sites` is the actual
+location(s), e.g. `user`, `tool_result`, `user+tool_result`, `tool_arg`,
+`assistant`, or `none`. `single` means independent per-bit flips; `burstN`
+means N-byte bursts. Model and harness live in the parent directory, so they
+are not repeated in every run name.
+
+Configs mirror this layout under `configs/<bench>/<bench>-<model>-<harness>/`.
+See [configs/README.md](configs/README.md).
+
+## Injection channels
+
+| label | config | model-visible location |
+|---|---|---|
+| A | `site: context`, `inject_user: true`, `inject_tool: false` | user prompt |
+| B | `site: context`, `inject_user: false`, `inject_tool: true` | tool results |
+| C | `site: context`, `inject_user: true`, `inject_tool: true` | prompt + tool results |
+| D | `site: tool` | tool arguments (`bash`, `write`, `edit`) |
+| E | `inject_assistant: true` | agent's own prior text/tool-call history |
+
+`math` and `longcontext` have no tool calls, so B/D are no-ops there. E uses a
+two-turn self-check (`math-selfcheck` / `longcontext-selfcheck`): answer once,
+then review after the first answer is injected. The long-context variant asks
+for a one-sentence explanation so the first answer is long enough for E.
 
 ## Architecture
 
 ```
-                     ┌──────────── config.yaml ────────────┐
-                     │ backend · harness · model · benchmark│
-                     └──────────────────┬──────────────────┘
-                                        ▼
-  Benchmark.tasks() ─► Task ─► Backend.run(task, model, InjectOptions)
-                                        │
-              ┌─────────────────────────┴─────────────────────────┐
-              ▼ backend = harbor                                    ▼ backend = docker
-        HarborBackend                                          DockerBackend
-        (Terminal-Bench format)                                (any task with an image)
-              │                                                       │
-   agent = FaultOpenCode / FaultCodex                     install injection → run agent → run verifier
-              │                                                       │
-              └───────────────────────┬───────────────────────────────┘
-                                      ▼
-                            in-container injection (per harness)
-                opencode: plugin tool.execute.before/after
-                codex   : /tmp/fault-bin shell shim (PATH shadow commands)
+configs/**.yaml
+      │
+      ▼
+RunConfig ──► Benchmark.tasks() ──► Task
+      │                              │
+      │                              ▼
+      └────────────────────► Backend.run(task, model, InjectOptions)
+                                     │
+                 ┌───────────────────┼───────────────────┐
+                 ▼                   ▼                   ▼
+             ChatBackend         DockerBackend       HarborBackend
+             (host opencode)     (docker run)        (harbor run)
+                 │                   │                   │
+                 └───────────────────┴───────────────────┘
+                                     ▼
+                         opencode fault plugin
+             chat.message / tool.execute.before|after
+             experimental.chat.messages.transform
+                                     │
+                                     ▼
+              runs/<bench>-<model>-<harness>/<run_id>/{result,injections,behavior,report}
+                                     │
+                                     ▼
+                         analysis.py ──► report.py
 ```
 
-**Two injection sites** (`site`)
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed data flow and a
+file-by-file map.
 
-| site | target |
-|---|---|
-| `context` | **all tool results** (everything the model observes) |
-| `tool` | **tool arguments** (`bash.command` / `write.content` / `edit.newString`) |
-
-**Fault models** (`fault`)
-
-| mode | semantics |
-|---|---|
-| `single` | every bit flips independently with probability `prob` |
-| `burst` | each byte triggers with probability `prob`; a run of `width` (default 8) consecutive bytes, **all 8 bits of every byte flipped** |
-
-PRNG is mulberry32; `seed` makes runs reproducible.
-
-**Two backends** (`backend`)
-
-| backend | fits | notes |
-|---|---|---|
-| `harbor` | Terminal-Bench format tasks | official runner: container isolation, image pull, install, scoring; agent = `FaultOpenCode` / `FaultCodex` |
-| `docker` | any task with an `image` (e.g. NL2Repo) | generic `docker run` + in-container verifier; supports `build_image` prebuild |
-
-**harness** (`harness` = the agent inside the container)
-
-- `opencode`: installs the plugin + `fault.json`; the aggregated endpoint is
-  registered as provider `pipe` (model id `pipe/<wire>`).
-- `codex`: no opencode-style hook, so it uses a **shell shim**
-  (`/tmp/fault-bin` shadows `cat/ls/grep/...`, stdout passes through
-  `fault_shim.py`; activated via `shell_environment_policy` / env PATH).
-  Only `context` is supported.
-
-## Components
-
-| module | responsibility |
-|---|---|
-| `pipe/faults.py` | fault models (pure functions) |
-| `pipe/injector.py` | `InjectOptions` + injection-log parsing (`FaultInjector` is a reference middleware) |
-| `pipe/_shim.py` | shell-level injection shim (used by codex) |
-| `pipe/models.py` | model and endpoint registry (keys/URLs come from env vars) |
-| `pipe/benchmarks.py` | `TerminalBench` / `NL2Repo` loaders |
-| `pipe/harbor.py` | `HarborBackend` (harbor backend) |
-| `pipe/docker.py` | `DockerBackend` (docker backend) |
-| `pipe/imagebuild.py` | prebuild images (bake the agent toolchain into the task image) |
-| `pipe/harbor_agent/` | in-Harbor fault agents: `FaultOpenCode` (plugin) / `FaultCodex` (shim) |
-| `pipe/config.py` `env.py` `types.py` `__main__.py` | config / `.env` loading / value types / CLI |
-
-## Usage
-
-### 1. Install and test
+## Quick start
 
 ```bash
 cd pipe
-python3 -m pytest -q
+python3 scripts/selfcheck.py           # no pytest required
+python3 -m pytest -q                   # if pytest is installed
 ```
 
-### 2. Configure environment variables (`.env`)
+## Web GUI
 
-`python -m pipe` auto-loads `pipe/.env` (without overriding existing env vars).
-**Keys and proxy go here, never into yaml.**
-
-```ini
-# opencode (go port, aggregated endpoint)
-PIPE_OPENCODE_BASE_URL=https://REPLACE_ME/opencode
-PIPE_OPENCODE_API_KEY=sk-REPLACE_ME
-
-# codex (aggregated endpoint, OpenAI-compatible)
-PIPE_CODEX_BASE_URL=https://REPLACE_ME/api
-PIPE_CODEX_API_KEY=sk-REPLACE_ME
-
-# proxy reachable from inside containers (host-forwarded address;
-# used by build-image and the docker backend)
-PIPE_CONTAINER_PROXY=http://REPLACE_ME:PORT
-```
-
-### 3. Dry run (print commands and artifacts, do not execute)
+A dependency-free local console can list configs, launch runs with overrides,
+stream logs, stop the active run, and open generated reports:
 
 ```bash
-python -m pipe run --config configs/harbor-opencode.yaml --dry-run --limit 1
-python -m pipe run --config configs/docker-codex.yaml   --dry-run --limit 1
+cd pipe
+python3 -m pipe gui
+# http://127.0.0.1:8765/
 ```
 
-### 4. Real run
+Use `--host` / `--port` to change the bind address, and `--no-open` to keep the
+browser closed. The server is intended for local single-user use; it has no
+authentication and allows one active run at a time.
 
-Set `dry_run: false` in the config, then:
+## Aggregate injection file
+
+Build one self-contained HTML file containing every recorded injection event
+(before/after text plus the agent reaction, final answer and per-run report
+link):
 
 ```bash
-python -m pipe run --config configs/harbor-opencode.yaml
-python -m pipe run --config configs/docker-codex.yaml --limit 5
+cd pipe
+python3 scripts/collect_injections.py
+# -> all-injections.html
 ```
 
-> The `harbor` backend needs `harbor` available (`uv tool install harbor`);
-> task images are pulled at run time. When containers have no direct internet,
-> image pulls and model calls go through a host proxy (see `scripts/fwd_proxy.py`).
+Use `--out` to choose a different path. Paths containing `_` are treated as
+debug/failed runs and skipped.
 
-### 5. Prebuild images (optional: saves bandwidth + faster)
-
-Bake node/npm + agent (+ pytest) into the task image; agent setup drops from
-~8min to ~2s.
+## Host chat runs
 
 ```bash
-python -m pipe build-image --base alexgshaw/regex-log:20251031 --agent opencode
-python -m pipe build-image --base <task-image> --agent codex --force
+python3 scripts/run_pilot.py --bench math30 --seeds 1
+python3 scripts/run_pilot.py --bench code-go --seeds 1
+python3 scripts/run_pilot.py --bench math --seeds 1,2 --prob 0.005
+
+python -m pipe run --config configs/math30/math30-mimo-v2.6-flash-free-opencode/A_user_p0.002_single_s1.yaml --limit 1
+python -m pipe run --config configs/code/code-deepseek-v4.1-flash-go-opencode/A_user_p0.001_single_s1.yaml --limit 1
 ```
 
-Or set `build_image: true` in a `docker` backend config; the derived tag
-`pipe-<base>-<agent>:latest` is built automatically.
+`run_pilot.py` supports `--bench`, `--limit`, `--seeds`, `--model`, `--prob`,
+`--tasks`, `--baseline/--no-baseline`, and `--dry-run`.
 
-## Config fields (YAML/JSON)
+The `math30-mimo-v2.6-flash-free-opencode` config prefers the free model and falls
+back to OpenCode Go; the smaller MiMo pilot suites use Go directly. Failed
+transport attempts are kept under `_failed/` when a fallback succeeds;
+successful fallback runs carry `fallback.json`.
 
-```yaml
-backend: harbor            # harbor | docker
-harness: opencode          # opencode | codex
-model: deepseek-v4.1-flash # deepseek-v4.1-flash | gpt-6-luna
-benchmark: terminal-bench  # terminal-bench | nl2repo
-benchmark_path: ../data/terminal-bench-2-1/tasks
-site: context              # context | tool
-fault:
-  mode: burst              # single | burst
-  prob: 0.001
-  width: 8
-  seed: 1
-tools: []
-log_path: fault-inject.log.jsonl
-limit: 1
-dry_run: true
+## Container runs
 
-# backend=harbor
-results_dir: harbor_results
-prebuilt: true             # task image already ships the agent toolchain (skip install)
+```bash
+python -m pipe run --config configs/nl2repo/nl2repo-deepseek-v4.1-flash-go-opencode/A_user_p0.001_burst8_s1.yaml
+python -m pipe run --config configs/nl2repo/nl2repo-deepseek-v4.1-flash-go-opencode/B_tool_result_p0.001_burst8_s1.yaml
+python -m pipe run --config configs/nl2repo/nl2repo-deepseek-v4.1-flash-go-opencode/E_assistant_p0.001_burst8_s1.yaml
 
-# backend=docker
-image_template: "ghcr.io/multimodal-art-projection/nl2repobench/{name}:latest"
-container_workdir: /app
-build_image: false
-agent_setup:               # install the agent in-container when the image lacks it
-  - "apt-get update && apt-get install -y curl nodejs npm"
-  - "npm i -g @openai/codex"
+# one task only
+python -m pipe run --config configs/nl2repo/nl2repo-deepseek-v4.1-flash-go-opencode/A_user_p0.001_burst8_s1.yaml \
+  --tasks jsonlines --limit 1
 ```
 
-## Model × harness (orthogonal)
+The `nl2repo-*.yaml` configs mount the host `opencode` binary and auth file read-only
+into the container. In WSL2, start from a fresh login shell if the current
+shell predates the `docker` group change.
 
-Connections are **per harness**: each harness has one aggregated endpoint
-(one url + one key), shared by both models.
+Container NL2Repo runs set `protect_tests: true`: the image's `tests/`
+directory is restored before verification, so the agent cannot inflate its
+score by editing tests.
 
-|  | opencode | codex |
-|---|---|---|
-| `deepseek-v4.1-flash` | `configs/*-opencode.yaml` | `configs/*-codex.yaml` |
-| `gpt-6-luna` | same (change `model`) | same |
+## Outcomes
 
-| harness | environment variables |
+`analysis.py` labels every injection event:
+
+| outcome | meaning |
 |---|---|
-| `opencode` | `PIPE_OPENCODE_BASE_URL`, `PIPE_OPENCODE_API_KEY` |
-| `codex` | `PIPE_CODEX_BASE_URL`, `PIPE_CODEX_API_KEY` |
+| `no_injection` | before/after are identical; the fault did not change the target |
+| `recovered` | agent explicitly detected the corruption and still produced a correct answer |
+| `recovered_silently` | agent did not explicitly detect it, but the final answer is still correct |
+| `silent_error` | agent did not detect it, accepted corrupted content, and the answer is wrong |
+| `detected_but_failed` | agent detected the corruption but still failed the task |
+| `failed_unattributed` | wrong answer without an explicit detection or clear use of corrupted content |
+
+`detected` is true when the agent mentions an anomaly, says it is retrying, or
+uses an alternate verification path. Superseded/failed runs are not kept in the current
+tree; any path containing `_` is skipped by the collector.
+
+## Artifacts
+
+```text
+runs/<bench>-<model>-<harness>/<timestamp>_<task>_<scheme>_<sites>_p<prob>_<mode><width>_s<seed>/
+├─ task.json          task, instruction, model, fault config
+├─ result.json        reward, final answer, tokens, injection counts
+├─ injections.jsonl   before/after for every injected span
+├─ behavior.jsonl     detected/action/outcome labels
+├─ summary.json       per-run aggregate
+├─ report.html        static before/after report
+├─ agent.jsonl        raw opencode JSON events
+├─ verify.log         container verifier output
+└─ work/              agent workspace (host chat)
+```
+
+Batch commands:
+
+```bash
+python -m pipe analyze runs/math30-deepseek-v4.1-flash-go-opencode
+python -m pipe compare runs/math30-deepseek-v4.1-flash-go-opencode
+python -m pipe report runs/math30-deepseek-v4.1-flash-go-opencode/<run>
+```
 
 ## Layout
 
-```
+```text
 pipe/
-├─ .env / .env.example   # environment variables (incl. PIPE_CONTAINER_PROXY)
-├─ configs/              # harbor/docker × opencode/codex
-├─ scripts/fwd_proxy.py  # container egress forwarder (0.0.0.0:19829 -> host proxy)
-├─ pipe/
-│  ├─ assets/            # opencode fault plugin template
-│  ├─ harbor_agent/      # in-Harbor fault agents (opencode / codex)
-│  ├─ _shim.py  faults.py  injector.py
-│  ├─ models.py  benchmarks.py  harbor.py  docker.py  imagebuild.py
-│  ├─ config.py  env.py  types.py  __main__.py
-└─ tests/
+├─ configs/             # <bench>/<bench>-<model>-<harness>/ configs; see configs/README.md
+├─ pipe/                # Python package
+│  ├─ assets/           # OpenCode plugin
+│  ├─ gui_assets/       # local console HTML/CSS/JS
+│  ├─ harbor_agent/     # Harbor OpenCode agent
+│  ├─ analysis.py       # behavior labels + compare
+│  ├─ benchmarks.py     # task loaders/evaluators
+│  ├─ chat.py           # host-side OpenCode backend
+│  ├─ config.py         # RunConfig + orchestration
+│  ├─ docker.py         # Docker backend
+│  ├─ faults.py         # bit-flip models
+│  ├─ gui.py            # local web console/API
+│  ├─ injector.py       # injector abstraction + logging types
+│  ├─ models.py         # model registry
+│  ├─ report.py         # HTML report
+│  ├─ runio.py          # shared run-dir/JSONL parsing
+│  └─ types.py          # Task / EvalResult / RunResult
+├─ scripts/             # run_pilot, selfcheck
+└─ tests/               # pytest tests
+
+../data/                 # GSM8K / MMLU / LongBench / HumanEval / NL2Repo / TB
 ```
+
+## Notes
+
+- Keys and endpoints belong in `.env`, never in YAML.
+- Every backend uses the same OpenCode plugin; there is no shell shim and no
+  HTTP proxy.
+- Docker Hub may need a registry mirror; GHCR images used by NL2Repo worked
+  directly in this environment.

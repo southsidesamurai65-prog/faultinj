@@ -1,0 +1,24 @@
+# Host-side coding pilot with OpenCode Go / deepseek-v4.1-flash.
+backend: chat
+model: deepseek-v4.1-flash-go
+model_fallbacks: []
+
+benchmark: code
+benchmark_path: ../data/code/humaneval3.jsonl
+
+site: context
+inject_user: true
+inject_tool: false
+fault:
+  mode: single
+  prob: 0.001
+  width: 8
+  seed: 1
+tools: []
+
+limit: 3
+dry_run: false
+runs_dir: runs/code-deepseek-v4.1-flash-go-opencode
+chat_retries: 1
+chat_retry_sleep: 3
+chat_timeout: 300

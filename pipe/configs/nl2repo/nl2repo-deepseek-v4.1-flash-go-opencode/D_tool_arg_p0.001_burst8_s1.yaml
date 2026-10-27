@@ -1,0 +1,26 @@
+# NL2Repo B/C/D injection-site experiment: OpenCode Go / deepseek.
+backend: docker
+model: deepseek-v4.1-flash-go
+
+benchmark: nl2repo
+benchmark_path: ../data/nl2repo/test_files
+image_template: "ghcr.io/multimodal-art-projection/nl2repobench/{name}:1.0"
+container_workdir: /workspace
+tasks: [jsonlines, pyperclip, trimming]
+
+site: tool
+inject_user: false
+inject_tool: false
+fault:
+  mode: burst
+  prob: 0.001
+  width: 8
+  seed: 1
+tools: []
+
+limit: 3
+dry_run: false
+runs_dir: runs/nl2repo-deepseek-v4.1-flash-go-opencode
+
+docker_opencode_bin: /home/south/.nvm/versions/node/v24.22.1/lib/node_modules/opencode-ai/bin/opencode.exe
+docker_auth_file: /home/south/.local/share/opencode/auth.json

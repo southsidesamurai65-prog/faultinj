@@ -47,6 +47,11 @@ class FaultOpenCodeOptions(OpenCodeOptions):
     fault_prebuilt: bool = Field(
         default=False, description="Task image already ships node/npm/opencode; skip install."
     )
+    inject_user: bool = Field(default=False, description="Inject the user prompt (context site).")
+    inject_tool: bool = Field(default=True, description="Inject tool results (context site).")
+    inject_assistant: bool = Field(
+        default=False, description="Inject prior assistant text/tool calls."
+    )
 
 
 class FaultOpenCode(OpenCode):
@@ -71,6 +76,9 @@ class FaultOpenCode(OpenCode):
             "prob": self.options.fault_prob,
             "seed": self.options.fault_seed,
             "logPath": "/logs/agent/fault-inject.log.jsonl",
+            "injectUser": self.options.inject_user,
+            "injectTool": self.options.inject_tool,
+            "injectAssistant": self.options.inject_assistant,
         }
 
         b64_plugin = base64.b64encode(_PLUGIN_PATH.read_text().encode()).decode()

@@ -1,0 +1,25 @@
+# Math30 E: inject the agent's own previous answer before self-check turn.
+backend: chat
+model: deepseek-v4.1-flash-go
+model_fallbacks: []
+
+benchmark: math-selfcheck
+benchmark_path: ../data/pilot/math30.jsonl
+
+site: context
+inject_user: false
+inject_tool: false
+inject_assistant: true
+fault:
+  mode: single
+  prob: 0.005
+  width: 8
+  seed: 1
+tools: []
+
+limit: 30
+dry_run: false
+runs_dir: runs/math30-deepseek-v4.1-flash-go-opencode
+chat_retries: 1
+chat_retry_sleep: 3
+chat_timeout: 120

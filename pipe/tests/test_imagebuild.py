@@ -23,12 +23,6 @@ def test_dockerfile_opencode():
     assert "pytest==8.4.1" in df
 
 
-def test_dockerfile_codex_no_pytest():
-    df = dockerfile_for("python:3.11-slim", "codex", with_pytest=False)
-    assert "@openai/codex" in df and "codex --version" in df
-    assert "pytest==" not in df
-
-
 def test_docker_backend_uses_built_tag(tmp_path):
     task = Task(
         name="six",

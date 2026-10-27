@@ -1,0 +1,22 @@
+# Harbor container backend x opencode x deepseek-v4.1-flash x Terminal-Bench B
+backend: harbor
+model: deepseek-v4.1-flash
+benchmark: terminal-bench
+benchmark_path: ../data/terminal-bench-2-1/tasks
+tasks: [fix-git, crack-7z-hash, mteb-leaderboard, prove-plus-comm, raman-fitting, configure-git-webserver, constraints-scheduling, openssl-selfsigned-cert, polyglot-c-py, break-filter-js-from-html]
+site: context
+inject_user: false
+inject_tool: true
+inject_assistant: false
+fault:
+  mode: burst
+  prob: 0.001
+  width: 8
+  seed: 1
+tools: []
+log_path: fault-inject.log.jsonl
+limit: 10
+dry_run: false
+runs_dir: runs/terminal-bench-deepseek-v4.1-flash-opencode
+results_dir: harbor_results/terminal-bench-ds/B
+prebuilt: true

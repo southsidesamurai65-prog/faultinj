@@ -1,0 +1,23 @@
+backend: chat
+model: mimo-v2.6-flash
+model_fallbacks: []
+
+benchmark: knowledge
+benchmark_path: ../data/pilot/knowledge.jsonl
+
+site: context
+inject_user: true
+inject_tool: false
+fault:
+  mode: single
+  prob: 0.0005
+  width: 8
+  seed: 1
+tools: []
+
+limit: 5
+dry_run: false
+runs_dir: runs/knowledge-mimo-v2.6-flash-opencode
+chat_retries: 1
+chat_retry_sleep: 5
+chat_timeout: 120

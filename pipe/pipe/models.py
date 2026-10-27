@@ -1,13 +1,9 @@
-"""Models and per-harness connection endpoints (2x2 matrix).
+"""Model registry and OpenCode connection endpoint.
 
-Each *harness* has exactly one aggregated endpoint (one base_url + one key)
-that serves all models. Models are just names; the harness pairs them with its
-own connection. Keys/URLs come from environment variables only.
+Keys/URLs come from environment variables only (or from the Go provider's
+local auth for ``*-go`` models).
 
-    CONNECTIONS["opencode"] -> opencode go port (one url + one key)
-    CONNECTIONS["codex"]    -> codex endpoint    (one url + one key)
-
-    2x2 = {opencode, codex} x {deepseek-v4.1-flash, gpt-6-luna}
+    CONNECTIONS["opencode"] -> custom OpenCode endpoint (one url + one key)
 """
 
 from __future__ import annotations
@@ -38,10 +34,11 @@ class Connection:
 class ModelSpec:
     name: str
     wire_model: str
+    provider: str = "opencode"
 
-    def id_for(self, provider: str) -> str:
+    def id_for(self, provider: str | None = None) -> str:
         """opencode-style provider-qualified id (e.g. ``pipe/deepseek-v4.1-flash``)."""
-        return f"{provider}/{self.wire_model}"
+        return f"{provider or self.provider}/{self.wire_model}"
 
 
 CONNECTIONS: dict[str, Connection] = {
@@ -51,17 +48,17 @@ CONNECTIONS: dict[str, Connection] = {
         base_url_default="https://REPLACE_ME/opencode",
         api_key_env="PIPE_OPENCODE_API_KEY",
     ),
-    "codex": Connection(
-        name="codex",
-        base_url_env="PIPE_CODEX_BASE_URL",
-        base_url_default="https://xx.com/api",
-        api_key_env="PIPE_CODEX_API_KEY",
-    ),
 }
 
 MODELS: dict[str, ModelSpec] = {
     "deepseek-v4.1-flash": ModelSpec("deepseek-v4.1-flash", "deepseek-v4.1-flash"),
-    "gpt-6-luna": ModelSpec("gpt-6-luna", "gpt-6-luna"),
+    # OpenCode's built-in providers.
+    "mimo-v2.6-flash-free": ModelSpec("mimo-v2.6-flash-free", "mimo-v2.6-flash-free"),
+    # OpenCode Go (uses the authenticated opencode-go provider).
+    "mimo-v2.6-flash": ModelSpec("mimo-v2.6-flash", "mimo-v2.6-flash", provider="opencode-go"),
+    "deepseek-v4.1-flash-go": ModelSpec(
+        "deepseek-v4.1-flash-go", "deepseek-v4.1-flash", provider="opencode-go"
+    ),
 }
 
 

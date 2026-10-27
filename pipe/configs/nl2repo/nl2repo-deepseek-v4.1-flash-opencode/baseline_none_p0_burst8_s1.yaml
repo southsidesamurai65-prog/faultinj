@@ -1,17 +1,19 @@
 # Docker container backend x opencode x deepseek-v4.1-flash x NL2Repo-Bench
 backend: docker
-harness: opencode
 model: deepseek-v4.1-flash
 
 benchmark: nl2repo
 benchmark_path: ../data/nl2repo/test_files
-image_template: "ghcr.io/multimodal-art-projection/nl2repobench/{name}:latest"
-container_workdir: /app
+image_template: "ghcr.io/multimodal-art-projection/nl2repobench/{name}:1.0"
+container_workdir: /workspace
 
 site: context
+inject_user: false
+inject_tool: false
+inject_assistant: false
 fault:
   mode: burst
-  prob: 0.001
+  prob: 0.0
   width: 8
   seed: 1
 tools: []
@@ -19,11 +21,11 @@ log_path: fault-inject.log.jsonl
 
 limit: 1
 dry_run: true
+runs_dir: runs/nl2repo-deepseek-v4.1-flash-opencode
 
 # Prebuild the task image (bake the agent toolchain in: saves bandwidth + faster)
 build_image: false
-# Install the agent inside the container when the image lacks it (needs network/proxy;
-# see PIPE_CONTAINER_PROXY in .env)
+# Install the agent inside the container when the image lacks it (needs network).
 # agent_setup:
 #   - "apt-get update && apt-get install -y curl nodejs npm"
 #   - "npm i -g opencode-ai"

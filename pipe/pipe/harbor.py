@@ -2,14 +2,9 @@
 
 Harbor is the official Terminal-Bench runner (container isolation, image pull,
 agent install, scoring). This backend builds the ``harbor run`` invocation and
-points Harbor at our fault-injecting agents:
-
-    opencode -> pipe.harbor_agent.fault_opencode:FaultOpenCode
-    codex    -> pipe.harbor_agent.fault_codex:FaultCodex
-
-opencode uses a provider overlay (``opencode_config``, model id ``pipe/<wire>``);
-codex uses the aggregated OpenAI-compatible endpoint via env
-(``OPENAI_BASE_URL`` / ``OPENAI_API_KEY``, model id ``<wire>``).
+points Harbor at our OpenCode fault-injecting agent
+(``pipe.harbor_agent.fault_opencode:FaultOpenCode``).  It uses a provider
+overlay (``opencode_config``, model id ``pipe/<wire>``).
 """
 
 from __future__ import annotations
@@ -24,21 +19,20 @@ from .injector import InjectOptions
 from .models import MODELS, ModelSpec, resolve_connection
 from .types import RunResult, Task
 
-AGENT_IMPORT_PATHS = {
-    "opencode": "pipe.harbor_agent.fault_opencode:FaultOpenCode",
-    "codex": "pipe.harbor_agent.fault_codex:FaultCodex",
-}
+AGENT_IMPORT = "pipe.harbor_agent.fault_opencode:FaultOpenCode"
 PROVIDER = "pipe"
 _PKG_ROOT = Path(__file__).resolve().parent.parent  # importable project root
 
 
 @dataclass
 class HarborConfig:
-    harness: str = "opencode"  # opencode | codex
     environment: str = "docker"
     n_concurrent: int = 1
     attempts: int = 1
     prebuilt: bool = False  # --ak fault_prebuilt=true when image ships the agent
+    inject_user: bool = False
+    inject_tool: bool = True
+    inject_assistant: bool = False
     results_dir: str = "harbor_results"
     memory_mb: int | None = None  # --override-memory-mb
     cpus: int | None = None  # --override-cpus
@@ -68,14 +62,14 @@ class HarborBackend:
         }
 
     def _model_id(self, model: ModelSpec) -> str:
-        return model.id_for(PROVIDER) if self.config.harness == "opencode" else model.wire_model
+        return model.id_for(PROVIDER)
 
     def build_command(
         self, task: Task, model: ModelSpec, inject: InjectOptions, *, task_arg: str | None = None
     ) -> list[str]:
         cmd = [
             "harbor", "run",
-            "-a", AGENT_IMPORT_PATHS[self.config.harness],
+            "-a", AGENT_IMPORT,
             "-m", self._model_id(model),
             "-e", self.config.environment,
             "-k", str(self.config.attempts),
@@ -88,12 +82,14 @@ class HarborBackend:
             "--ak", f"fault_prob={inject.fault.prob}",
             "--ak", f"fault_seed={inject.fault.seed}",
             "--ak", f"fault_prebuilt={str(self.config.prebuilt).lower()}",
+            "--ak", f"inject_user={str(self.config.inject_user).lower()}",
+            "--ak", f"inject_tool={str(self.config.inject_tool).lower()}",
+            "--ak", f"inject_assistant={str(self.config.inject_assistant).lower()}",
         ]
-        if self.config.harness == "opencode":
-            if inject.tools:
-                cmd += ["--ak", f"fault_tools={','.join(inject.tools)}"]
-            cfg_json = json.dumps(self.opencode_config(model), separators=(",", ":"))
-            cmd += ["--ak", f"opencode_config={cfg_json}"]
+        if inject.tools:
+            cmd += ["--ak", f"fault_tools={','.join(inject.tools)}"]
+        cfg_json = json.dumps(self.opencode_config(model), separators=(",", ":"))
+        cmd += ["--ak", f"opencode_config={cfg_json}"]
         cmd += ["-p", task_arg or str(task.workdir), *self.config.extra_args]
         if self.config.memory_mb:
             cmd += ["--override-memory-mb", str(self.config.memory_mb)]
@@ -105,12 +101,6 @@ class HarborBackend:
     def build_env(self) -> dict[str, str]:
         env = dict(os.environ)
         env["PYTHONPATH"] = f"{_PKG_ROOT}{os.pathsep}{env.get('PYTHONPATH', '')}"
-        if self.config.harness == "codex":
-            _, conn = resolve_connection("codex")
-            if conn.get("api_key"):
-                env["OPENAI_API_KEY"] = conn["api_key"]
-            if conn.get("base_url"):
-                env["OPENAI_BASE_URL"] = conn["base_url"]
         return env
 
     def latest_reward(self) -> float | None:

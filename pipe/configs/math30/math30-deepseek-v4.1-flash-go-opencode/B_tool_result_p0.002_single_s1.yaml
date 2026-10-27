@@ -1,0 +1,24 @@
+# Math30 DeepSeek Go injection-site experiment.
+backend: chat
+model: deepseek-v4.1-flash-go
+model_fallbacks: []
+
+benchmark: math
+benchmark_path: ../data/pilot/math30.jsonl
+
+site: context
+inject_user: false
+inject_tool: true
+fault:
+  mode: single
+  prob: 0.002
+  width: 8
+  seed: 1
+tools: []
+
+limit: 30
+dry_run: false
+runs_dir: runs/math30-deepseek-v4.1-flash-go-opencode
+chat_retries: 1
+chat_retry_sleep: 3
+chat_timeout: 120

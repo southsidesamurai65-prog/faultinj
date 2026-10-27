@@ -15,11 +15,9 @@ from pathlib import Path
 
 AGENT_PACKAGES = {
     "opencode": "opencode-ai@latest",
-    "codex": "@openai/codex",
 }
 AGENT_VERSION_CMD = {
     "opencode": "opencode --version",
-    "codex": "codex --version",
 }
 PYTEST_PINS = "pytest==8.4.1 pytest-json-ctrf==0.3.5"
 
@@ -39,8 +37,6 @@ def dockerfile_for(base_image: str, agent: str, with_pytest: bool = True) -> str
     )
     return (
         f"FROM {base_image}\n"
-        "\n"
-        "ARG http_proxy\nARG https_proxy\nARG HTTP_PROXY\nARG HTTPS_PROXY\n"
         "\n"
         "RUN apt-get update \\\n"
         " && apt-get install -y --no-install-recommends \\\n"
@@ -66,7 +62,6 @@ def build_image(
     base_image: str,
     agent: str = "opencode",
     tag: str | None = None,
-    proxy: str | None = None,
     with_pytest: bool = True,
     force: bool = False,
 ) -> str:
@@ -80,8 +75,5 @@ def build_image(
         df = Path(tmp) / "Dockerfile"
         df.write_text(dockerfile)
         cmd = ["docker", "build", "-t", tag, "-f", str(df), tmp]
-        if proxy:
-            for arg in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-                cmd += ["--build-arg", f"{arg}={proxy}"]
         subprocess.run(cmd, check=True)
     return tag

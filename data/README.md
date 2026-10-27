@@ -1,13 +1,15 @@
 # data — benchmark datasets
 
-Task definitions for the benchmarks live here, decoupled from the experiment
-code (`exp/`) and the framework (`pipe/`). The framework points at this
-directory via `benchmark_path` in its config.
+Task definitions for the benchmarks live here, decoupled from the framework
+(`pipe/`). The framework points at this directory via `benchmark_path` in its
+config.
 
 ## Layout
 
 ```
 data/
+├─ pilot/                         # GSM8K / MMLU / LongBench small subsets
+├─ code/                          # HumanEval 3-task host-side coding pilot
 ├─ terminal-bench-2-1/
 │  └─ tasks/<task-name>/          # task.toml · instruction.md · tests/ · environment/ · solution/
 └─ nl2repo/
@@ -16,13 +18,12 @@ data/
 
 | benchmark | tasks | scoring | environment image |
 |---|---|---|---|
-| `terminal-bench` | 89 | in-container tests (binary) | Docker Hub (`docker_image` field) |
+| `terminal-bench` | 91 | in-container tests (binary) | Docker Hub (`docker_image` field) |
 | `nl2repo` | 104 | upstream pytest pass rate (continuous) | `ghcr.io` (per-task image) |
 
 > The repos contain **task definitions only** (spec / commands / counts / test
 > file lists), **not the container images**. Images are pulled on demand at run
-> time (one-time). When containers have no direct internet, pulling and model
-> calls go through a host proxy.
+> time (one-time). Model calls happen on the host; no HTTP proxy is used.
 
 ## Download
 
